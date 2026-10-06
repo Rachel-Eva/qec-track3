@@ -20,6 +20,11 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
@@ -93,7 +98,7 @@ def main():
         def run_sim():
             from importlib import import_module
             mod = import_module("export_telemetry")
-            mod.main()
+            mod.main(argv=[])
 
         results["sim"] = run_stage(
             "Simulation Data Generation (export_telemetry)",

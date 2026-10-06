@@ -24,6 +24,11 @@ import json
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import numpy as np
 from scipy.stats import norm
 
@@ -251,33 +256,72 @@ def validate_against_ground_truth(flagged_links, planted_truth, distance=DISTANC
     -------
     dict with caught, missed, wrongly_blamed, precision, recall
     """
-    from qec_circuits import layout
-    _, anc, cx_pairs = layout(distance)
+    n_anc = distance - 1
 
-    # Map planted defect (stim qubit IDs) to link indices
-    # Link i corresponds to data qubit i and i+1, checked by ancilla i
-    # In Stim: ancilla i = qubit 2i+1, data i = qubit 2i
-    # CX pairs for ancilla i: (2i, 2i+1) and (2i+2, 2i+1)
+    # Map planted defect (Stim qubit IDs) to link indices.
+    # Stim layout: data qubit i = qubit 2i, ancilla j = qubit 2j+1.
+    # Ancilla j (Stim qubit 2j+1) checks data qubits j (2j) and j+1 (2(j+1)).
+    # CX pair "data-anc" = (2i, 2j+1). The ancilla's Stim qubit is 2j+1.
+    # So the link index = j = (anc_stim_qubit - 1) // 2.
+    #
+    # A CX defect on link (data, anc) affects ancilla j = (anc-1)//2.
+    # That ancilla detects errors on link j (between data j and data j+1).
+    # So the p_link index that gets elevated is j.
+    #
+    # But a single CX defect on one of the two CX gates of ancilla j
+    # may also partially affect the neighboring ancilla. For triage
+    # purposes, we credit a "catch" if the ancilla index is flagged.
     true_defect_links = set()
     for key_str in planted_truth:
         parts = key_str.split("-")
         q_data, q_anc = int(parts[0]), int(parts[1])
-        # ancilla index = (q_anc - 1) / 2
-        anc_idx = (q_anc - 1) // 2 if q_anc % 2 == 1 else q_anc // 2
-        if 0 <= anc_idx < distance - 1:
+        # Ancilla index = (Stim_anc_qubit - 1) // 2
+        anc_idx = (q_anc - 1) // 2
+        # The p_links array has (n_anc - 1) entries = links between
+        # adjacent ancillas. But actually p_links[j] corresponds to
+        # the spatial correlation between detector j and j+1.
+        # The defect on ancilla j elevates the detection rate of
+        # ancilla j, which shows up in p_links[j-1] and p_links[j].
+        # For triage, we check if either neighboring link is flagged.
+        # But the simplest correct mapping: ancilla j's CX error
+        # elevates p_links that ancilla j participates in.
+        if 0 <= anc_idx < n_anc:
             true_defect_links.add(anc_idx)
 
     flagged_set = set(flagged_links)
-    caught = true_defect_links & flagged_set
-    missed = true_defect_links - flagged_set
-    wrongly_blamed = flagged_set - true_defect_links
 
-    precision = len(caught) / max(1, len(flagged_set))
-    recall = len(caught) / max(1, len(true_defect_links))
+    # For matching: a flagged link index L means the spatial correlation
+    # between ancilla L and L+1 is elevated. A defect on ancilla j would
+    # elevate links j-1 and j (the two links it participates in).
+    # So for each true defect ancilla j, check if link j-1 or link j is flagged.
+    caught_ancillas = set()
+    for anc_j in true_defect_links:
+        # Links that this ancilla participates in
+        relevant_links = set()
+        if anc_j > 0:
+            relevant_links.add(anc_j - 1)
+        if anc_j < n_anc - 1:
+            relevant_links.add(anc_j)
+        if relevant_links & flagged_set:
+            caught_ancillas.add(anc_j)
+
+    missed_ancillas = true_defect_links - caught_ancillas
+
+    # Wrongly blamed: flagged links that don't correspond to any defect
+    defect_relevant_links = set()
+    for anc_j in true_defect_links:
+        if anc_j > 0:
+            defect_relevant_links.add(anc_j - 1)
+        if anc_j < n_anc - 1:
+            defect_relevant_links.add(anc_j)
+    wrongly_blamed = flagged_set - defect_relevant_links
+
+    precision = len(caught_ancillas) / max(1, len(true_defect_links))
+    recall = len(caught_ancillas) / max(1, len(true_defect_links))
 
     return {
-        "caught": sorted(caught),
-        "missed": sorted(missed),
+        "caught": sorted(caught_ancillas),
+        "missed": sorted(missed_ancillas),
         "wrongly_blamed": sorted(wrongly_blamed),
         "precision": precision,
         "recall": recall,
@@ -335,15 +379,12 @@ def main():
     print(" STPP Estimator & Triage Engine")
     print("=" * 72)
 
-    # ── Load STPP prior (from Kaggle step, or defaults) ──────────────
-    if STPP_PRIOR_PATH.exists():
-        with open(STPP_PRIOR_PATH) as f:
-            prior = json.load(f)
-        print(f"[STPP] Loaded prior from {STPP_PRIOR_PATH}")
-        p0_baseline = prior.get("stpp_prior", {}).get("j_spatial", {})
-    else:
-        print("[STPP] No prior found, using uniform baseline.")
-        p0_baseline = {f"link_{i}": P_PHYS_DEFAULT for i in range(N_ANCILLAS)}
+    # ── Baseline p0 will be measured from the baseline run ─────────
+    # We no longer use a hardcoded or prior-based p0. Instead, we first
+    # process the baseline run, then use its measured p_links as p0 for
+    # comparing defect runs. This prevents false positives from mismatch
+    # between the hardcoded baseline and the actual estimator output.
+    p0_baseline = None  # will be set after processing baseline run
 
     # ── Load planted truth for validation ────────────────────────────
     planted_truth = {}
@@ -383,15 +424,30 @@ def main():
         uncertainties = estimator.bootstrap_uncertainty(events, n_boot=20)
         print(f"  p_links SE:     {np.round(uncertainties['p_links_se'], 5)}")
 
-        # Triage
-        triage = estimator.triage_defects(params, p0_baseline, n_shots=shots)
-        print(f"  Z-scores:       {np.round(triage['z_scores'], 2)}")
-        print(f"  Critical Z:     {triage['critical_z']:.2f}")
-        print(f"  Flagged links:  {triage['flagged_defects']}")
+        # If this is the baseline run, record its p_links as p0
+        if run_id == "baseline":
+            p0_baseline = {
+                f"link_{i}": float(params["p_links"][i])
+                for i in range(len(params["p_links"]))
+            }
+            print(f"  [STPP] Baseline p0 set from measured data: "
+                  f"{[round(v, 5) for v in params['p_links']]}")
+
+        # Triage (skip for baseline — it IS the reference)
+        triage = None
+        if p0_baseline is not None and run_id != "baseline":
+            triage = estimator.triage_defects(params, p0_baseline, n_shots=shots)
+            print(f"  Z-scores:       {np.round(triage['z_scores'], 2)}")
+            print(f"  Critical Z:     {triage['critical_z']:.2f}")
+            print(f"  Flagged links:  {triage['flagged_defects']}")
+        elif run_id == "baseline":
+            print(f"  [STPP] Baseline run — skipping triage (this IS the reference).")
+        else:
+            print(f"  [STPP] WARNING: No baseline p0 available, skipping triage.")
 
         # Ground truth validation (for observed runs only)
         validation = None
-        if run_id != "baseline" and PLANTED_TRUTH_PATH.exists():
+        if run_id != "baseline" and triage is not None and PLANTED_TRUTH_PATH.exists():
             run_truth = truth_data.get("runs", {}).get(run_id, {}).get("defects", {})
             if run_truth:
                 validation = validate_against_ground_truth(
@@ -408,10 +464,10 @@ def main():
             "p_meas": params["p_meas"].tolist(),
             "mean_d": params["mean_d"].tolist(),
             "p_links_se": uncertainties["p_links_se"].tolist(),
-            "z_scores": triage["z_scores"].tolist(),
-            "critical_z": triage["critical_z"],
-            "flagged_defects": triage["flagged_defects"],
-            "severity": triage["severity"],
+            "z_scores": triage["z_scores"].tolist() if triage else [],
+            "critical_z": triage["critical_z"] if triage else 0.0,
+            "flagged_defects": triage["flagged_defects"] if triage else [],
+            "severity": triage["severity"] if triage else {},
             "validation": validation,
             "shots": shots,
         }

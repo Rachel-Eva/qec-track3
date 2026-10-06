@@ -1,0 +1,100 @@
+{
+  "baseline": {
+    "uniform": {
+      "logical_error_rate": 0.00754,
+      "n_errors": 754,
+      "time_s": 0.1015999999945052,
+      "shots": 100000
+    },
+    "static_insitu": {
+      "logical_error_rate": 0.00679,
+      "n_errors": 679,
+      "time_s": 0.1400714000046719,
+      "shots": 100000
+    },
+    "stpp_full": {
+      "logical_error_rate": 0.0069,
+      "n_errors": 690,
+      "time_s": 0.13881179998861626,
+      "shots": 100000
+    }
+  },
+  "obs_k2": {
+    "uniform": {
+      "logical_error_rate": 0.00903,
+      "n_errors": 903,
+      "time_s": 0.10612390001188032,
+      "shots": 100000
+    },
+    "static_insitu": {
+      "logical_error_rate": 0.00835,
+      "n_errors": 835,
+      "time_s": 0.14787950000027195,
+      "shots": 100000
+    },
+    "stpp_full": {
+      "logical_error_rate": 0.00846,
+      "n_errors": 846,
+      "time_s": 0.152781100012362,
+      "shots": 100000
+    },
+    "oracle": {
+      "logical_error_rate": 0.00712,
+      "n_errors": 712,
+      "time_s": 0.11602440002025105,
+      "shots": 100000
+    }
+  },
+  "obs_k5": {
+    "uniform": {
+      "logical_error_rate": 0.01275,
+      "n_errors": 1275,
+      "time_s": 0.1242762999900151,
+      "shots": 100000
+    },
+    "static_insitu": {
+      "logical_error_rate": 0.01071,
+      "n_errors": 1071,
+      "time_s": 0.17590920001384802,
+      "shots": 100000
+    },
+    "stpp_full": {
+      "logical_error_rate": 0.01145,
+      "n_errors": 1145,
+      "time_s": 0.17613890001666732,
+      "shots": 100000
+    },
+    "oracle": {
+      "logical_error_rate": 0.00812,
+      "n_errors": 812,
+      "time_s": 0.15119019997655414,
+      "shots": 100000
+    }
+  },
+  "obs_k10": {
+    "uniform": {
+      "logical_error_rate": 0.01977,
+      "n_errors": 1977,
+      "time_s": 0.15555769999627955,
+      "shots": 100000
+    },
+    "static_insitu": {
+      "logical_error_rate": 0.01496,
+      "n_errors": 1496,
+      "time_s": 0.2044801999873016,
+      "shots": 100000
+    },
+    "stpp_full": {
+      "logical_error_rate": 0.01539,
+      "n_errors": 1539,
+      "time_s": 0.20820620001177303,
+      "shots": 100000
+    },
+    "oracle": {
+      "logical_error_rate": 0.0097,
+      "n_errors": 970,
+      "time_s": 0.18613089999416843,
+      "shots": 100000
+    }
+  }
+}

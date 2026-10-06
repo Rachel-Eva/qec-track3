@@ -19,6 +19,11 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import numpy as np
 import pymatching
 
@@ -43,69 +48,127 @@ def _prob_to_weight(p):
 
 # ═════════════════════════════════════════════════════════════════════
 # GRAPH BUILDERS
+#
+# For a d=5 repetition code with R syndrome rounds, Stim produces
+# (R+1) × (d-1) = (R+1) × 4 detectors:
+#   - Rounds 0..R-1: syndrome detectors (4 per round)
+#   - Round R: final-round detectors (data parity XOR last syndrome)
+#
+# The matching graph mirrors this spacetime structure. Each detector
+# is a node. Edges carry fault_ids to track logical observable flips.
+#
+# KEY FIX: Boundary edges must carry fault_ids={0} so that any
+# matching chain from one boundary to the other is counted as a
+# logical error. Without fault_ids, decode_batch returns shape
+# (shots, 0) and no errors are ever detected.
 # ═════════════════════════════════════════════════════════════════════
 
-def build_uniform_matching(rounds, n_anc, p_uniform=0.01):
+def _build_matching_graph(n_det_rounds, n_anc, p_spatial_fn, p_temporal_fn,
+                          p_boundary_fn):
     """
-    Uniform-weight matching graph. All edges have the same probability.
-    Serves as the naive baseline decoder.
+    Generic spacetime matching graph builder for a repetition code.
+
+    Parameters
+    ----------
+    n_det_rounds : int
+        Number of detector rounds (syndrome rounds + 1 for the final layer).
+    n_anc : int
+        Number of ancilla qubits (= distance - 1).
+    p_spatial_fn : callable(round_idx, link_idx) -> float
+        Returns the error probability for spatial edge (link between
+        ancilla link_idx and link_idx+1) in detector round round_idx.
+    p_temporal_fn : callable(round_idx, anc_idx) -> float
+        Returns the error probability for temporal edge (between
+        detector round_idx-1 and round_idx) for ancilla anc_idx.
+    p_boundary_fn : callable(round_idx, side) -> float
+        Returns the error probability for the boundary edge at the
+        given side ('left' or 'right') in detector round round_idx.
+
+    Returns
+    -------
+    pymatching.Matching
     """
-    w = _prob_to_weight(p_uniform)
-    n_nodes = rounds * n_anc
     matching = pymatching.Matching()
 
-    for r in range(rounds):
+    # Total detectors = n_det_rounds × n_anc
+    # Node indexing: node(r, i) = r * n_anc + i
+
+    for r in range(n_det_rounds):
         for i in range(n_anc):
             node = r * n_anc + i
 
-            # Spatial edges (within same round)
+            # 1. Spatial edges (within same detector round)
+            #    These represent data-qubit errors between ancilla i and i+1.
+            #    They do NOT flip the logical observable (internal edges).
             if i < n_anc - 1:
-                matching.add_edge(node, node + 1, weight=w)
+                p_s = _clamp(p_spatial_fn(r, i))
+                w = _prob_to_weight(p_s)
+                neighbor = r * n_anc + (i + 1)
+                matching.add_edge(node, neighbor, weight=w, fault_ids=set())
 
-            # Temporal edges (between consecutive rounds)
-            if r < rounds - 1:
-                matching.add_edge(node, node + n_anc, weight=w)
+            # 2. Temporal edges (between consecutive detector rounds)
+            #    These represent measurement errors.
+            if r < n_det_rounds - 1:
+                p_t = _clamp(p_temporal_fn(r, i))
+                w = _prob_to_weight(p_t)
+                next_node = (r + 1) * n_anc + i
+                matching.add_edge(node, next_node, weight=w, fault_ids=set())
 
-            # Boundary edges (connect boundary nodes to virtual boundary)
-            if i == 0 or i == n_anc - 1:
-                matching.add_boundary_edge(node, weight=w)
+        # 3. Boundary edges
+        #    LEFT boundary (ancilla 0): error on data qubit 0 flips
+        #    the logical observable (since observable = data[0]).
+        #    RIGHT boundary (ancilla n_anc-1): error on data qubit d-1
+        #    does NOT flip the observable for a repetition code with
+        #    observable on qubit 0.
+        #
+        #    For a repetition code protecting Z-observable on qubit 0:
+        #      - Left boundary edge: fault_ids={0} (flips observable)
+        #      - Right boundary edge: fault_ids=set() (no observable flip)
+        left_node = r * n_anc + 0
+        p_bl = _clamp(p_boundary_fn(r, 'left'))
+        matching.add_boundary_edge(left_node, weight=_prob_to_weight(p_bl),
+                                   fault_ids={0})
+
+        right_node = r * n_anc + (n_anc - 1)
+        p_br = _clamp(p_boundary_fn(r, 'right'))
+        matching.add_boundary_edge(right_node, weight=_prob_to_weight(p_br),
+                                   fault_ids=set())
 
     return matching
 
 
-def build_static_matching(stpp_params, rounds, n_anc):
+def build_uniform_matching(n_det_rounds, n_anc, p_uniform=0.01):
+    """
+    Uniform-weight matching graph. All edges have the same probability.
+    Serves as the naive baseline decoder.
+    """
+    return _build_matching_graph(
+        n_det_rounds, n_anc,
+        p_spatial_fn=lambda r, i: p_uniform,
+        p_temporal_fn=lambda r, i: p_uniform,
+        p_boundary_fn=lambda r, side: p_uniform,
+    )
+
+
+def build_static_matching(stpp_params, n_det_rounds, n_anc):
     """
     Static in-situ matching: spatial edges weighted by estimated p_link,
     temporal edges by p_meas only (no non-Markovian memory).
     """
     p_links = stpp_params["p_links"]
     p_meas = stpp_params["p_meas"]
-    matching = pymatching.Matching()
 
-    for r in range(rounds):
-        for i in range(n_anc):
-            node = r * n_anc + i
-
-            # Spatial edges weighted by estimated p_link
-            if i < n_anc - 1:
-                w = _prob_to_weight(p_links[i])
-                matching.add_edge(node, node + 1, weight=w)
-
-            # Temporal edges weighted by p_meas (no kappa)
-            if r < rounds - 1:
-                w = _prob_to_weight(p_meas[i])
-                matching.add_edge(node, node + n_anc, weight=w)
-
-            # Boundary
-            if i == 0:
-                matching.add_boundary_edge(node, weight=_prob_to_weight(p_links[0]))
-            elif i == n_anc - 1:
-                matching.add_boundary_edge(node, weight=_prob_to_weight(p_links[-1]))
-
-    return matching
+    return _build_matching_graph(
+        n_det_rounds, n_anc,
+        p_spatial_fn=lambda r, i: p_links[i],
+        p_temporal_fn=lambda r, i: p_meas[i],
+        p_boundary_fn=lambda r, side: (
+            p_links[0] if side == 'left' else p_links[-1]
+        ),
+    )
 
 
-def build_stpp_matching(stpp_params, rounds, n_anc):
+def build_stpp_matching(stpp_params, n_det_rounds, n_anc):
     """
     Full STPP-aware matching: spatial edges weighted by p_link,
     temporal edges weighted by p_meas + κ (non-Markovian memory kernel).
@@ -117,31 +180,15 @@ def build_stpp_matching(stpp_params, rounds, n_anc):
     p_links = stpp_params["p_links"]
     p_meas = stpp_params["p_meas"]
     kappa = stpp_params["kappa_temporal"]
-    matching = pymatching.Matching()
 
-    for r in range(rounds):
-        for i in range(n_anc):
-            node = r * n_anc + i
-
-            # 1. Spatial edges (data qubit / CNOT errors)
-            if i < n_anc - 1:
-                w = _prob_to_weight(p_links[i])
-                matching.add_edge(node, node + 1, weight=w)
-
-            # 2. Temporal edges (measurement + non-Markovian memory)
-            if r < rounds - 1:
-                # p_effective = p_meas + κ (memory kernel contribution)
-                p_eff = p_meas[i] + kappa[i]
-                w = _prob_to_weight(p_eff)
-                matching.add_edge(node, node + n_anc, weight=w)
-
-            # Boundary edges
-            if i == 0:
-                matching.add_boundary_edge(node, weight=_prob_to_weight(p_links[0]))
-            elif i == n_anc - 1:
-                matching.add_boundary_edge(node, weight=_prob_to_weight(p_links[-1]))
-
-    return matching
+    return _build_matching_graph(
+        n_det_rounds, n_anc,
+        p_spatial_fn=lambda r, i: p_links[i],
+        p_temporal_fn=lambda r, i: p_meas[i] + kappa[i],
+        p_boundary_fn=lambda r, side: (
+            p_links[0] if side == 'left' else p_links[-1]
+        ),
+    )
 
 
 def build_oracle_matching(distance, rounds, p_phys, defects):
@@ -181,7 +228,7 @@ def decode_batch(matching, detection_events):
 
     Returns
     -------
-    predictions : ndarray
+    predictions : ndarray, shape (shots, num_fault_ids)
     """
     if detection_events.ndim == 3:
         shots, rounds, n_anc = detection_events.shape
@@ -204,18 +251,18 @@ def benchmark_decoders(detection_events, observable_flips, stpp_params,
         shots, r, n = detection_events.shape
         flat = detection_events.reshape(shots, -1).astype(np.uint8)
         n_anc = n
-        eff_rounds = r
+        n_det_rounds = r
     else:
         flat = detection_events.astype(np.uint8)
         shots = flat.shape[0]
         n_anc = N_ANCILLAS
-        eff_rounds = flat.shape[1] // n_anc
+        n_det_rounds = flat.shape[1] // n_anc
 
     results = {}
     decoders = {
-        "uniform": build_uniform_matching(eff_rounds, n_anc, p_phys),
-        "static_insitu": build_static_matching(stpp_params, eff_rounds, n_anc),
-        "stpp_full": build_stpp_matching(stpp_params, eff_rounds, n_anc),
+        "uniform": build_uniform_matching(n_det_rounds, n_anc, p_phys),
+        "static_insitu": build_static_matching(stpp_params, n_det_rounds, n_anc),
+        "stpp_full": build_stpp_matching(stpp_params, n_det_rounds, n_anc),
     }
 
     # Oracle (if defects are known)
@@ -239,10 +286,19 @@ def benchmark_decoders(detection_events, observable_flips, stpp_params,
                     obs = obs.reshape(-1, 1)
                 if pred.ndim == 1:
                     pred = pred.reshape(-1, 1)
-                # Trim to matching dimensions
-                min_cols = min(pred.shape[1], obs.shape[1])
-                n_errors = int(np.sum(np.any(pred[:, :min_cols] != obs[:, :min_cols], axis=1)))
-                ler = n_errors / shots
+
+                # Ensure dimensions match
+                if pred.shape[1] == 0:
+                    # Bug guard: no fault_ids means broken graph
+                    print(f"  [WARN] Decoder '{name}' has 0 fault_ids — graph has no observables!")
+                    n_errors = -1
+                    ler = -1.0
+                else:
+                    min_cols = min(pred.shape[1], obs.shape[1])
+                    n_errors = int(np.sum(np.any(
+                        pred[:, :min_cols] != obs[:, :min_cols], axis=1
+                    )))
+                    ler = n_errors / shots
             else:
                 n_errors = -1
                 ler = -1.0
@@ -320,12 +376,15 @@ def main():
         defects = planted_runs.get(run_id, {}).get("defects", {})
 
         n_anc = N_ANCILLAS
-        eff_rounds = n_dets // n_anc
-        det_3d = dets.reshape(-1, eff_rounds, n_anc)
+        n_det_rounds = n_dets // n_anc
+        det_3d = dets.reshape(-1, n_det_rounds, n_anc)
+
+        # For the oracle, we need the actual syndrome rounds (not detector layers)
+        syndrome_rounds = n_det_rounds - 1
 
         results = benchmark_decoders(
             det_3d, obs, stpp_params,
-            distance=DISTANCE, rounds=eff_rounds - 1,
+            distance=DISTANCE, rounds=syndrome_rounds,
             p_phys=P_PHYS_DEFAULT, defects=defects or None,
         )
 

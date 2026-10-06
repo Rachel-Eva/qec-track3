@@ -42,27 +42,32 @@ def qiskit_circuit(distance=5, rounds=3):
 
 # ------------------------------------------------------------------ Stim
 def stim_circuit(distance=5, rounds=3, p_data=0.01, p_cx=0.01, p_meas=0.01,
-                 cx_p=None):
+                 cx_p=None, drift_alpha=0.0):
     """cx_p: optional {(control, target): prob} overriding p_cx per link
-    (the hook for planted defects, e.g. {(2, 1): 0.1})."""
+    (the hook for planted defects, e.g. {(2, 1): 0.1}).
+    drift_alpha: per-round temporal drift factor, scaling noise by (1 + drift_alpha * r)"""
     cx_p = cx_p or {}
     data, anc, cx_pairs = layout(distance)
     n_anc = len(anc)
     c = stim.Circuit()
     c.append("R", sorted(data + anc))
     for r in range(rounds):
-        c.append("X_ERROR", data, p_data)
+        scale = 1.0 + drift_alpha * r
+        r_p_data = min(p_data * scale, 0.75)
+        r_p_meas = min(p_meas * scale, 0.75)
+        c.append("X_ERROR", data, r_p_data)
         for ctl, tgt in cx_pairs:
+            base_cx = cx_p.get((ctl, tgt), p_cx)
             c.append("CX", [ctl, tgt])
-            c.append("DEPOLARIZE2", [ctl, tgt], cx_p.get((ctl, tgt), p_cx))
-        c.append("MR", anc, p_meas)
+            c.append("DEPOLARIZE2", [ctl, tgt], min(base_cx * scale, 0.75))
+        c.append("MR", anc, r_p_meas)
         for i in range(n_anc):
             cur = stim.target_rec(-(n_anc - i))
             if r == 0:
                 c.append("DETECTOR", [cur])
             else:
                 c.append("DETECTOR", [cur, stim.target_rec(-(n_anc - i) - n_anc)])
-    c.append("X_ERROR", data, p_data)
+    c.append("X_ERROR", data, min(p_data * (1.0 + drift_alpha * rounds), 0.75))
     c.append("M", data)
     for i in range(n_anc):
         last = stim.target_rec(-distance - (n_anc - i))

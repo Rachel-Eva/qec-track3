@@ -25,7 +25,7 @@ ROUNDS_DEFAULT  = 4          # syndrome extraction rounds
 SHOTS_DEFAULT   = 100_000    # default shot budget
 
 # ── Physical Noise Baseline ─────────────────────────────────────────
-P_PHYS_DEFAULT  = 0.02       # baseline physical error rate
+P_PHYS_DEFAULT  = 0.015      # baseline physical error rate (p₂ = 1.5%)
 P_IDLE_DEFAULT  = 0.003      # data qubit idle bit-flip rate
 P_CX_DEFAULT    = 0.005      # CX depolarizing rate
 P_RO_DEFAULT    = 0.010      # readout error rate
@@ -39,17 +39,20 @@ N_BOOTSTRAP          = 40    # bootstrap resamples for SE
 # ── Planted Defect Scenarios ─────────────────────────────────────────
 # Keys are (data_qubit, ancilla_qubit) in Stim qubit IDs.
 # Values are multiplier k on baseline CX error.
+# Spec: defect on link (D1, D2) = Stim (2, 1), multipliers 2/5/10.
 PLANTED_DEFECTS = {
     "clean":  {},
-    "single": {(2, 1): 10.0},
-    "double": {(2, 1): 10.0, (6, 7): 5.0},
-    "triple": {(2, 1): 10.0, (6, 7): 5.0, (4, 3): 8.0},
+    "k2":     {(2, 1): 2.0},
+    "k5":     {(2, 1): 5.0},
+    "k10":    {(2, 1): 10.0},
 }
 
 # ── Non-Markovian Temporal Injection ─────────────────────────────────
-# For sim-level temporal memory injection: probability that a measurement
-# flip in round r-1 causes a correlated flip in round r.
+# Probability that a measurement flip in round r-1 causes correlated
+# flip in round r (TLS / readout latching).
 TEMPORAL_MEMORY_INJECTION_P = 0.05   # κ injection strength
+# Per-round multiplicative drift: p_eff(r) = p_base * (1 + DRIFT_ALPHA * r)
+DRIFT_ALPHA = 0.08
 
 # ── Decoder Settings ────────────────────────────────────────────────
 DECODER_WEIGHT_CLAMP_MIN = 1e-4

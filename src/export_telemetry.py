@@ -36,25 +36,26 @@ SHARED = ROOT / "shared"
 RAW_DIR = SHARED / "telemetry_raw"
 
 # Planted defects: link id -> CX error multiplier k.  Edit freely.
+# Spec: defect on link (D1, D2) = Stim "2-1", with multipliers 2, 5, 10.
 DEFECT_RUNS = {
-    "obs_a": {"2-1": 10.0},
-    "obs_b": {"2-1": 10.0, "6-7": 5.0},
-    "obs_c": {"2-1": 10.0, "6-7": 5.0, "4-3": 8.0},
+    "obs_k2":  {"2-1": 2.0},
+    "obs_k5":  {"2-1": 5.0},
+    "obs_k10": {"2-1": 10.0},
 }
 
 
 # --------------------------------------------------------------------------
 # ADAPTER: the only place that touches src/noise_models.py. Edit to match.
 # --------------------------------------------------------------------------
-def build_circuit(p_phys, defects, d, rounds):
+def build_circuit(p_phys, defects, d, rounds, drift_alpha=0.0):
     """Return a stim.Circuit. `defects` is {"data-anc": k}; may be empty."""
     from noise_models import make_circuit  # src/ is on sys.path when run as a script
 
-    # make_circuit(distance=5, rounds=3, p=0.01, defects=None, link_p=None)
+    # make_circuit(distance=5, rounds=4, p=0.015, defects=None, link_p=None, drift_alpha=0.0)
     # defects keys are (ctl, tgt) = (data, ancilla), i.e. "2-1" -> (2, 1)
     defect_arg = {tuple(int(x) for x in k.split("-")): v for k, v in defects.items()}
     return make_circuit(distance=d, rounds=rounds, p=p_phys,
-                        defects=defect_arg or None)
+                        defects=defect_arg or None, drift_alpha=drift_alpha)
 
 
 # --------------------------------------------------------------------------
@@ -103,11 +104,11 @@ def uniform_logical_errors(p_phys, dets, obs, d, rounds):
     return int(np.sum(np.any(pred != obs, axis=1)))
 
 
-def run_one(run_id, role, p_phys, defects, shots, seed, d, rounds, n_inline):
+def run_one(run_id, role, p_phys, defects, shots, seed, d, rounds, n_inline, drift_alpha=0.0):
     n, data_q, anc_q, links = layout(d)
     n_anc = len(anc_q)
 
-    circ = build_circuit(p_phys, defects, d, rounds)
+    circ = build_circuit(p_phys, defects, d, rounds, drift_alpha=drift_alpha)
     assert circ.num_qubits == n, f"circuit has {circ.num_qubits} qubits, expected {n}"
     assert circ.num_measurements == n_anc * rounds + d, "unexpected measurement count"
     assert circ.num_detectors == n_anc * (rounds + 1), "unexpected detector count"
@@ -172,24 +173,25 @@ def run_one(run_id, role, p_phys, defects, shots, seed, d, rounds, n_inline):
     return run
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--d", type=int, default=5)
-    ap.add_argument("--rounds", type=int, default=3)
-    ap.add_argument("--p", type=float, default=0.02)
+    ap.add_argument("--rounds", type=int, default=4)
+    ap.add_argument("--p", type=float, default=0.015)
     ap.add_argument("--shots", type=int, default=100_000)
     ap.add_argument("--seed", type=int, default=1000)
     ap.add_argument("--inline", type=int, default=500, help="shots embedded in the JSON")
-    args = ap.parse_args()
+    ap.add_argument("--drift", type=float, default=0.08, help="per-round temporal drift factor")
+    args = ap.parse_args(argv)
 
     n, data_q, anc_q, links = layout(args.d)
     SHARED.mkdir(exist_ok=True)
 
     runs = [run_one("baseline", "baseline", args.p, {}, args.shots, args.seed,
-                    args.d, args.rounds, args.inline)]
+                    args.d, args.rounds, args.inline, drift_alpha=args.drift)]
     for i, (rid, defects) in enumerate(DEFECT_RUNS.items(), start=1):
         runs.append(run_one(rid, "observed", args.p, defects, args.shots, args.seed + i,
-                            args.d, args.rounds, args.inline))
+                            args.d, args.rounds, args.inline, drift_alpha=args.drift))
 
     telemetry = {
         "schema_version": 1,

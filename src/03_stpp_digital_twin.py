@@ -11,6 +11,11 @@ import json
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -51,10 +56,12 @@ def plot_chip_graph(stpp_results, run_id, ax, distance=DISTANCE):
 
     # Draw links (edges)
     for i in range(n_anc):
+        ax.plot([data_x[i], anc_x[i]], [0, 0], color="#cccccc", lw=2, zorder=1)
+        ax.plot([anc_x[i], data_x[i + 1]], [0, 0], color="#cccccc", lw=2, zorder=1)
+    for i in range(len(p_links)):
         color = link_cmap(link_norm(p_links[i]))
         lw = 2 + 8 * link_norm(p_links[i])
-        ax.plot([data_x[i], anc_x[i]], [0, 0], color=color, lw=lw, zorder=1)
-        ax.plot([anc_x[i], data_x[i + 1]], [0, 0], color=color, lw=lw, zorder=1)
+        ax.plot([anc_x[i], data_x[i + 1]], [0, 0], color=color, lw=lw, zorder=2)
 
     # Draw data qubits (circles)
     for i, x in enumerate(data_x):
@@ -72,8 +79,8 @@ def plot_chip_graph(stpp_results, run_id, ax, distance=DISTANCE):
                 fontweight="bold", zorder=4)
 
     # Annotations: p_link values
-    for i in range(n_anc):
-        mid_x = (data_x[i] + data_x[i + 1]) / 2
+    for i in range(len(p_links)):
+        mid_x = (data_x[i + 1])
         ax.text(mid_x, -0.15, f"{p_links[i]:.4f}", ha="center", va="top",
                 fontsize=7, color="darkred")
 

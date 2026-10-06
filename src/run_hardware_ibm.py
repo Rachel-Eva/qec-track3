@@ -118,32 +118,53 @@ def add_pauli_twirling(qc):
     
     For now, this is a no-op pass-through.
     """
-    # ── Pauli twirling group for CX: 16 elements ────────────────────
-    # Each element: (pre_control, pre_target, post_control, post_target)
-    # where each is in {I, X, Y, Z}
-    # 
-    # TWIRL_GROUP = [
-    #     ("I", "I", "I", "I"),
-    #     ("I", "X", "I", "X"),
-    #     ("I", "Y", "Z", "Y"),
-    #     ("I", "Z", "Z", "Z"),
-    #     ("X", "I", "X", "X"),
-    #     ("X", "X", "X", "I"),
-    #     ("X", "Y", "Y", "Z"),
-    #     ("X", "Z", "Y", "Y"),
-    #     ("Y", "I", "Y", "X"),
-    #     ("Y", "X", "Y", "I"),
-    #     ("Y", "Y", "X", "Z"),
-    #     ("Y", "Z", "X", "Y"),
-    #     ("Z", "I", "Z", "I"),
-    #     ("Z", "X", "Z", "X"),
-    #     ("Z", "Y", "I", "Y"),
-    #     ("Z", "Z", "I", "Z"),
-    # ]
-    #
-    # TODO: Iterate through qc.data, find CX gates, insert twirl frames.
+    TWIRL_GROUP = [
+        ("I", "I", "I", "I"),
+        ("I", "X", "I", "X"),
+        ("I", "Y", "Z", "Y"),
+        ("I", "Z", "Z", "Z"),
+        ("X", "I", "X", "X"),
+        ("X", "X", "X", "I"),
+        ("X", "Y", "Y", "Z"),
+        ("X", "Z", "Y", "Y"),
+        ("Y", "I", "Y", "X"),
+        ("Y", "X", "Y", "I"),
+        ("Y", "Y", "X", "Z"),
+        ("Y", "Z", "X", "Y"),
+        ("Z", "I", "Z", "I"),
+        ("Z", "X", "Z", "X"),
+        ("Z", "Y", "I", "Y"),
+        ("Z", "Z", "I", "Z"),
+    ]
 
-    return qc  # Pass-through for now
+    rng = np.random.default_rng()
+    twirled_qc = qc.copy_empty_like()
+
+    def _apply_pauli(c, name, qubit):
+        if name == "X":
+            c.x(qubit)
+        elif name == "Y":
+            c.y(qubit)
+        elif name == "Z":
+            c.z(qubit)
+
+    for instruction in qc.data:
+        op = instruction.operation
+        qargs = instruction.qubits
+        cargs = instruction.clbits
+        if op.name == "cx":
+            ctl, tgt = qargs[0], qargs[1]
+            twirl = TWIRL_GROUP[rng.integers(len(TWIRL_GROUP))]
+            pre_c, pre_t, post_c, post_t = twirl
+            _apply_pauli(twirled_qc, pre_c, ctl)
+            _apply_pauli(twirled_qc, pre_t, tgt)
+            twirled_qc.append(op, qargs, cargs)
+            _apply_pauli(twirled_qc, post_c, ctl)
+            _apply_pauli(twirled_qc, post_t, tgt)
+        else:
+            twirled_qc.append(instruction)
+
+    return twirled_qc
 
 
 def run_on_hardware(backend, qc, shots, optimization_level=0):
