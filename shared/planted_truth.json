@@ -1,0 +1,23 @@
+{
+ "WARNING": "Scoring only. Informed decoder weights must come from Person A's estimates.",
+ "runs": {
+  "obs_a": {
+   "defects": {
+    "2-1": 10.0
+   }
+  },
+  "obs_b": {
+   "defects": {
+    "2-1": 10.0,
+    "6-7": 5.0
+   }
+  },
+  "obs_c": {
+   "defects": {
+    "2-1": 10.0,
+    "6-7": 5.0,
+    "4-3": 8.0
+   }
+  }
+ }
+}
