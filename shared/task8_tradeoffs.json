@@ -5,7 +5,7 @@
       "n_physical_qubits": 5,
       "overhead": 0.5555555555555556,
       "rounds": 3,
-      "logical_error_rate": 0.01624,
+      "logical_error_rate": 0.0166,
       "shots": 50000
     },
     {
@@ -13,7 +13,7 @@
       "n_physical_qubits": 9,
       "overhead": 1.0,
       "rounds": 3,
-      "logical_error_rate": 0.00346,
+      "logical_error_rate": 0.0024,
       "shots": 50000
     },
     {
@@ -21,7 +21,7 @@
       "n_physical_qubits": 13,
       "overhead": 1.4444444444444444,
       "rounds": 3,
-      "logical_error_rate": 0.0004,
+      "logical_error_rate": 0.00042,
       "shots": 50000
     },
     {
@@ -37,7 +37,7 @@
       "n_physical_qubits": 21,
       "overhead": 2.3333333333333335,
       "rounds": 3,
-      "logical_error_rate": 4e-05,
+      "logical_error_rate": 2e-05,
       "shots": 50000
     }
   ],
@@ -46,55 +46,55 @@
       "distance": 5,
       "rounds": 1,
       "depth_factor": 1.0,
-      "logical_error_rate": 0.0006
+      "logical_error_rate": 0.00036
     },
     {
       "distance": 5,
       "rounds": 2,
       "depth_factor": 2.0,
-      "logical_error_rate": 0.00206
+      "logical_error_rate": 0.00164
     },
     {
       "distance": 5,
       "rounds": 3,
       "depth_factor": 3.0,
-      "logical_error_rate": 0.00308
+      "logical_error_rate": 0.00298
     },
     {
       "distance": 5,
       "rounds": 4,
       "depth_factor": 4.0,
-      "logical_error_rate": 0.00406
+      "logical_error_rate": 0.00382
     },
     {
       "distance": 5,
       "rounds": 5,
       "depth_factor": 5.0,
-      "logical_error_rate": 0.00462
+      "logical_error_rate": 0.0059
     },
     {
       "distance": 5,
       "rounds": 7,
       "depth_factor": 7.0,
-      "logical_error_rate": 0.00764
+      "logical_error_rate": 0.00746
     },
     {
       "distance": 5,
       "rounds": 9,
       "depth_factor": 9.0,
-      "logical_error_rate": 0.0108
+      "logical_error_rate": 0.0099
     }
   ],
   "decoder_runtime": {
     "uniform": {
-      "time_s": 0.03689170000143349,
-      "ler": 0.00262,
-      "throughput_shots_per_s": 1355318.4049002123
+      "time_s": 0.0565082999819424,
+      "ler": 0.00322,
+      "throughput_shots_per_s": 884825.7692405864
     },
     "stpp": {
-      "time_s": 0.03558840000187047,
-      "ler": 0.00262,
-      "throughput_shots_per_s": 1404952.1753541064
+      "time_s": 0.053218399989418685,
+      "ler": 0.00322,
+      "throughput_shots_per_s": 939524.6758628859
     }
   }
 }

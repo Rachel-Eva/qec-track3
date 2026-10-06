@@ -3,19 +3,19 @@
     "uniform": {
       "logical_error_rate": 0.00754,
       "n_errors": 754,
-      "time_s": 0.1015999999945052,
+      "time_s": 0.17261330000474118,
       "shots": 100000
     },
     "static_insitu": {
       "logical_error_rate": 0.00679,
       "n_errors": 679,
-      "time_s": 0.1400714000046719,
+      "time_s": 0.25381140000536107,
       "shots": 100000
     },
     "stpp_full": {
       "logical_error_rate": 0.0069,
       "n_errors": 690,
-      "time_s": 0.13881179998861626,
+      "time_s": 0.20774520002305508,
       "shots": 100000
     }
   },
@@ -23,25 +23,25 @@
     "uniform": {
       "logical_error_rate": 0.00903,
       "n_errors": 903,
-      "time_s": 0.10612390001188032,
+      "time_s": 0.15858709998428822,
       "shots": 100000
     },
     "static_insitu": {
       "logical_error_rate": 0.00835,
       "n_errors": 835,
-      "time_s": 0.14787950000027195,
+      "time_s": 0.21754370001144707,
       "shots": 100000
     },
     "stpp_full": {
       "logical_error_rate": 0.00846,
       "n_errors": 846,
-      "time_s": 0.152781100012362,
+      "time_s": 0.25388470001053065,
       "shots": 100000
     },
     "oracle": {
       "logical_error_rate": 0.00712,
       "n_errors": 712,
-      "time_s": 0.11602440002025105,
+      "time_s": 0.18928849999792874,
       "shots": 100000
     }
   },
@@ -49,25 +49,25 @@
     "uniform": {
       "logical_error_rate": 0.01275,
       "n_errors": 1275,
-      "time_s": 0.1242762999900151,
+      "time_s": 0.17646899999817833,
       "shots": 100000
     },
     "static_insitu": {
       "logical_error_rate": 0.01071,
       "n_errors": 1071,
-      "time_s": 0.17590920001384802,
+      "time_s": 0.23454460001084954,
       "shots": 100000
     },
     "stpp_full": {
       "logical_error_rate": 0.01145,
       "n_errors": 1145,
-      "time_s": 0.17613890001666732,
+      "time_s": 0.26102930001798086,
       "shots": 100000
     },
     "oracle": {
       "logical_error_rate": 0.00812,
       "n_errors": 812,
-      "time_s": 0.15119019997655414,
+      "time_s": 0.23234620000584982,
       "shots": 100000
     }
   },
@@ -75,25 +75,25 @@
     "uniform": {
       "logical_error_rate": 0.01977,
       "n_errors": 1977,
-      "time_s": 0.15555769999627955,
+      "time_s": 0.23250159999588504,
       "shots": 100000
     },
     "static_insitu": {
       "logical_error_rate": 0.01496,
       "n_errors": 1496,
-      "time_s": 0.2044801999873016,
+      "time_s": 0.3089600999956019,
       "shots": 100000
     },
     "stpp_full": {
       "logical_error_rate": 0.01539,
       "n_errors": 1539,
-      "time_s": 0.20820620001177303,
+      "time_s": 0.3137754000199493,
       "shots": 100000
     },
     "oracle": {
       "logical_error_rate": 0.0097,
       "n_errors": 970,
-      "time_s": 0.18613089999416843,
+      "time_s": 0.27531970001291484,
       "shots": 100000
     }
   }

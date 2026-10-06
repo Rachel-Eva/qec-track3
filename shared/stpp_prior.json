@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "source": "kaggle_circuit_stability",
+  "classifier": {
+    "model": "XGBClassifier(n_estimators=100, max_depth=5)",
+    "split": "stratified 80/20, random_state=42",
+    "roc_auc": 0.9378063725490196,
+    "f1": 0.9314079422382672,
+    "logreg_roc_auc": 0.9411764705882354,
+    "logreg_f1": 0.9236363636363636,
+    "time_split_roc_auc": 0.9073055773762765,
+    "time_split_f1": 0.9454545454545454,
+    "n_train": 640,
+    "n_test": 160,
+    "positive_rate": 0.84875
+  },
+  "feature_importances": {
+    "num_qubits": 0.10414614528417587,
+    "circuit_depth": 0.4329124391078949,
+    "gate_error_rate": 0.09751827269792557,
+    "decoherence_time": 0.20354865491390228,
+    "chip_temperature_mK": 0.08847653865814209,
+    "run_day": 0.07339797914028168
+  },
+  "stpp_prior": {
+    "j_spatial": {
+      "link_0": 0.026329875000000006,
+      "link_1": 0.026329875000000006,
+      "link_2": 0.026329875000000006,
+      "link_3": 0.026329875000000006
+    },
+    "mean_gate_error_rate": 0.026329875000000006,
+    "gate_error_plausible_probability": true,
+    "drift_rel_per_day": 0.0033607672130596547,
+    "temp_gate_error_corr": 0.03608595988770646,
+    "noise_bias_eta": null,
+    "noise_bias_note": "Not derivable: dataset has one coherence-time column and no X/Z rates."
+  },
+  "test_mean_shift": {
+    "num_qubits": -0.34750000000000014,
+    "circuit_depth": -0.7862499999999955,
+    "gate_error_rate": -0.0006983750000000045,
+    "decoherence_time": 1.1221499999999978,
+    "chip_temperature_mK": -0.30343749999999936,
+    "run_day": -0.6174999999999997
+  }
+}

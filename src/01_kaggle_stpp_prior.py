@@ -1,268 +1,173 @@
 """
-01_kaggle_stpp_prior.py -- Kaggle Circuit Stability Ingestion & STPP Prior Generation.
+01_kaggle_stpp_prior.py -- Kaggle Quantum Circuit Stability: classical baseline + noise prior.
 
-Pipeline:
-  1. Load the Kaggle circuit_stability.csv dataset.
-  2. Train a classical XGBoost classifier to predict circuit instability (ROC-AUC).
-  3. Extract temporal variance of physical features over time windows.
-  4. Compute noise bias η = p_Z / p_X from calibration features.
-  5. Export a STPP prior JSON with:
-     - Baseline spatial coupling estimates J_spatial
-     - Temporal memory decay kernel K_temporal
-     - Noise bias η
-     - Feature importances from XGBoost
+Columns (train.csv): id, num_qubits, circuit_depth, gate_error_rate,
+                     decoherence_time, chip_temperature_mK, run_day, target
+test.csv has the same columns without `target` (unlabeled, so it is only
+used for a distribution-shift check, never for scoring).
 
-▸▸▸ REQUIRES: Place `circuit_stability.csv` in shared/ ◂◂◂
-▸▸▸ REQUIRES: pip install xgboost scikit-learn pandas        ◂◂◂
+What this script does (and does NOT do):
+  1. Classical baseline: predict `target` from hardware features.
+     Reports ROC-AUC and F1 on a stratified 80/20 held-out split, plus a
+     time-based split (train on early run_day, test on late) because
+     run_day is temporal and a random split can look better than reality.
+  2. Noise prior: coarse numbers (typical gate error, drift trend with
+     run_day, temperature correlation) written to shared/stpp_prior.json.
+  3. It does NOT derive eta = p_Z/p_X: the dataset has one coherence time
+     column, not separate T1/T2 or X/Z rates. eta is reported as unavailable.
+
+The prior is context/sanity-check information. Triage thresholds in the
+estimator come from the measured clean baseline run, not from this file.
+
+Usage:  python 01_kaggle_stpp_prior.py [--train PATH] [--test PATH]
 """
+import argparse
 import json
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
-# ── Project imports ──────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stpp_config import (
-    KAGGLE_CSV_PATH, STPP_PRIOR_PATH, SHARED, FIGURES,
-    DISTANCE, N_ANCILLAS, P_PHYS_DEFAULT
-)
+from stpp_config import SHARED, FIGURES, N_ANCILLAS, P_PHYS_DEFAULT, STPP_PRIOR_PATH
 
-warnings.filterwarnings("ignore", category=FutureWarning)
-
-
-def load_dataset(csv_path):
-    """
-    Load the Kaggle Circuit Stability dataset.
-    
-    ▸▸▸ FILL: Adjust column names to match the actual CSV schema.    ◂◂◂
-    ▸▸▸ Expected columns (adapt as needed):                          ◂◂◂
-    ▸▸▸   - qubit_id, gate_type, error_rate, t1, t2, readout_error,  ◂◂◂
-    ▸▸▸     cx_error, timestamp, stability_label (0/1)               ◂◂◂
-    """
-    import pandas as pd
-    
-    df = pd.read_csv(csv_path)
-    print(f"[Kaggle] Loaded {len(df)} rows, columns: {list(df.columns)}")
-    return df
+FEATURES = ["num_qubits", "circuit_depth", "gate_error_rate",
+            "decoherence_time", "chip_temperature_mK", "run_day"]
+LABEL = "target"
 
 
-def train_stability_classifier(df):
-    """
-    Train XGBoost binary classifier predicting circuit instability.
-    
-    Returns: (model, roc_auc, feature_importances_dict)
-    
-    ▸▸▸ FILL: Adjust feature_cols and label_col to match your CSV.   ◂◂◂
-    """
-    from sklearn.model_selection import StratifiedKFold, cross_val_score
-    from sklearn.metrics import roc_auc_score
+def make_model():
     import xgboost as xgb
-    
-    # ─── Placeholder column names: REPLACE with actual column names ───
-    label_col = "stability_label"       # ◂◂◂ FILL: your binary label column
-    feature_cols = [                     # ◂◂◂ FILL: your feature columns
-        c for c in df.columns if c != label_col
-    ]
-    
-    X = df[feature_cols].select_dtypes(include=[np.number]).fillna(0)
-    y = df[label_col].values
-    
-    clf = xgb.XGBClassifier(
-        n_estimators=200,
-        max_depth=6,
-        learning_rate=0.1,
-        use_label_encoder=False,
-        eval_metric="logloss",
-        n_jobs=-1,
-        random_state=42,
-    )
-    
-    # 5-fold stratified CV
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    scores = cross_val_score(clf, X, y, cv=cv, scoring="roc_auc")
-    print(f"[Kaggle] XGBoost 5-fold ROC-AUC: {scores.mean():.4f} ± {scores.std():.4f}")
-    
-    # Fit on full data for feature importances
-    clf.fit(X, y)
-    importances = dict(zip(X.columns, clf.feature_importances_.tolist()))
-    
-    return clf, float(scores.mean()), importances
+    # CPU, 100 trees, depth 5 (as in the spec sheet)
+    return xgb.XGBClassifier(n_estimators=100, max_depth=5, learning_rate=0.1,
+                             eval_metric="logloss", n_jobs=-1, random_state=42)
 
 
-def extract_temporal_variance(df):
-    """
-    Compute the temporal variance of physical features across time windows.
-    This captures how much the noise drifts over time → temporal memory kernel.
-    
-    Returns: dict of {feature_name: temporal_variance}
-    
-    ▸▸▸ FILL: Adjust timestamp_col and the features to track.        ◂◂◂
-    """
-    timestamp_col = "timestamp"   # ◂◂◂ FILL: your timestamp column
-    
-    # If no timestamp column, use row index as proxy
-    if timestamp_col not in df.columns:
-        print(f"[Kaggle] WARNING: No '{timestamp_col}' column found, using row index.")
-        df = df.copy()
-        df[timestamp_col] = np.arange(len(df))
-    
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    numeric_cols = [c for c in numeric_cols if c != timestamp_col]
-    
-    # Compute rolling variance in windows of ~100 rows
-    window = min(100, len(df) // 5)
-    temporal_var = {}
-    for col in numeric_cols:
-        rolling_std = df[col].rolling(window, min_periods=1).std()
-        temporal_var[col] = float(rolling_std.mean())
-    
-    return temporal_var
+def evaluate(model, Xtr, ytr, Xte, yte):
+    from sklearn.metrics import roc_auc_score, f1_score
+    model.fit(Xtr, ytr)
+    proba = model.predict_proba(Xte)[:, 1]
+    pred = (proba >= 0.5).astype(int)
+    return float(roc_auc_score(yte, proba)), float(f1_score(yte, pred))
 
 
-def compute_noise_bias(df):
-    """
-    Estimate noise bias η = p_Z / p_X from calibration data.
-    
-    ▸▸▸ FILL: Adjust based on available error rate columns.          ◂◂◂
-    ▸▸▸ If CSV has separate X/Z error rates, compute ratio directly. ◂◂◂
-    ▸▸▸ Otherwise, estimate from T1/T2 relaxation times.             ◂◂◂
-    """
-    # Strategy 1: Direct ratio if columns exist
-    if "p_z" in df.columns and "p_x" in df.columns:
-        eta = (df["p_z"].mean()) / max(1e-6, df["p_x"].mean())
-        return float(eta)
-    
-    # Strategy 2: Estimate from T1/T2
-    # For depolarizing noise: η ≈ T1 / T2 (roughly)
-    if "t1" in df.columns and "t2" in df.columns:
-        t1_mean = df["t1"].mean()
-        t2_mean = df["t2"].mean()
-        eta = t1_mean / max(1e-6, t2_mean)
-        return float(eta)
-    
-    # Fallback: assume balanced noise
-    print("[Kaggle] WARNING: Cannot compute noise bias, defaulting to η=1.0 (balanced)")
-    return 1.0
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--train", default=str(SHARED / "train.csv"))
+    ap.add_argument("--test", default=str(SHARED / "test.csv"))
+    args = ap.parse_args()
 
+    train = pd.read_csv(args.train)
+    print(f"[Kaggle] train: {train.shape}, columns: {list(train.columns)}")
+    missing = [c for c in FEATURES + [LABEL] if c not in train.columns]
+    if missing:
+        sys.exit(f"[Kaggle] Missing columns {missing}. Edit FEATURES/LABEL at top of file.")
 
-def build_stpp_prior(importances, temporal_var, eta):
-    """
-    Assemble the STPP prior from Kaggle-derived quantities.
-    
-    Maps feature importances → spatial coupling graph J_ij
-    Maps temporal variance → memory decay kernel K(Δt)
-    """
-    # ── Spatial coupling prior: J_ij ─────────────────────────────────
-    # Map CX-related feature importances to link coupling strengths
-    # For d=5 repetition code: 4 ancillas → 8 CX links (each ancilla has 2 CNOTs)
-    # Links: (d0,a0), (d1,a0), (d1,a1), (d2,a1), (d2,a2), (d3,a2), (d3,a3), (d4,a3)
-    j_spatial = {}
-    for i in range(N_ANCILLAS):
-        # Use CX error importance as spatial coupling proxy
-        cx_importance = max(
-            importances.get("cx_error", 0.01),
-            importances.get(f"cx_error_{i}", 0.01),
-            P_PHYS_DEFAULT
-        )
-        j_spatial[f"link_{i}"] = float(cx_importance)
-    
-    # ── Temporal memory kernel: K(Δt) ────────────────────────────────
-    # Aggregate temporal variance into a single decay constant
-    # Higher variance → stronger non-Markovian memory
-    if temporal_var:
-        mean_var = np.mean(list(temporal_var.values()))
-        # Normalize to [0, 1] range as a memory strength coefficient
-        k_temporal = float(np.clip(mean_var / max(1e-6, max(temporal_var.values())), 0, 1))
+    y = train[LABEL]
+    if y.nunique() > 2:
+        sys.exit(f"[Kaggle] '{LABEL}' has {y.nunique()} distinct values; this script "
+                 f"expects a binary label. Tell me what the target means.")
+    y = (y == sorted(y.unique())[-1]).astype(int).values  # larger value = positive class
+    X = train[FEATURES].astype(float).fillna(train[FEATURES].median())
+    print(f"[Kaggle] positive-class rate: {y.mean():.3f}")
+
+    from sklearn.model_selection import train_test_split
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import make_pipeline
+
+    # --- 1a. stratified 80/20 split (spec) -----------------------------
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+    model = make_model()
+    auc, f1 = evaluate(model, Xtr, ytr, Xte, yte)
+    print(f"[Kaggle] XGBoost  80/20 split: ROC-AUC={auc:.4f}  F1={f1:.4f}")
+
+    # simple reference model so the number has context
+    lr = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+    auc_lr, f1_lr = evaluate(lr, Xtr, ytr, Xte, yte)
+    print(f"[Kaggle] LogReg   80/20 split: ROC-AUC={auc_lr:.4f}  F1={f1_lr:.4f}")
+
+    # --- 1b. time-based split: train early days, test late days --------
+    cut = train["run_day"].quantile(0.8)
+    early, late = (train["run_day"] <= cut).values, (train["run_day"] > cut).values
+    auc_t = f1_t = None
+    if late.sum() > 20 and len(np.unique(y[late])) == 2 and len(np.unique(y[early])) == 2:
+        auc_t, f1_t = evaluate(make_model(), X[early], y[early], X[late], y[late])
+        print(f"[Kaggle] XGBoost time split (run_day > {cut:.0f}): ROC-AUC={auc_t:.4f}  F1={f1_t:.4f}")
+
+    # --- 2. feature importances (model trained on the 80% split) -------
+    importances = dict(zip(FEATURES, map(float, model.feature_importances_)))
+    print("[Kaggle] importances:", {k: round(v, 3) for k, v in importances.items()})
+
+    # --- 3. coarse noise prior -----------------------------------------
+    g = train["gate_error_rate"].astype(float)
+    p_gate = float(g.mean())
+    by_day = train.groupby("run_day")["gate_error_rate"].mean()
+    if len(by_day) >= 3:
+        slope = float(np.polyfit(by_day.index.values.astype(float), by_day.values, 1)[0])
     else:
-        k_temporal = 0.0
-    
-    return {
-        "j_spatial": j_spatial,
-        "k_temporal": k_temporal,
-        "noise_bias_eta": eta,
-    }
+        slope = 0.0
+    drift_rel_per_day = slope / p_gate if p_gate > 0 else 0.0
+    temp_corr = float(train["chip_temperature_mK"].corr(g))
+    print(f"[Kaggle] mean gate_error_rate={p_gate:.5f} | relative drift/day={drift_rel_per_day:+.4f} "
+          f"| corr(temp, gate_error)={temp_corr:+.3f}")
 
+    # Only use the Kaggle gate error as a per-link prior if it looks like a probability
+    plausible = 1e-4 < p_gate < 0.1
+    p_link_prior = p_gate if plausible else P_PHYS_DEFAULT
+    if not plausible:
+        print(f"[Kaggle] NOTE: mean gate_error_rate={p_gate} is not a plausible probability "
+              f"(units?). Using config default {P_PHYS_DEFAULT} for the link prior.")
 
-def export_prior(prior, importances, roc_auc, output_path):
-    """Write the STPP prior JSON for downstream consumption."""
+    # --- 4. optional: test.csv distribution shift ----------------------
+    shift = None
+    if Path(args.test).exists():
+        test = pd.read_csv(args.test)
+        shift = {c: float(test[c].mean() - train[c].mean()) for c in FEATURES if c in test.columns}
+        print(f"[Kaggle] test.csv: {test.shape} (unlabeled; mean shift vs train computed)")
+
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "kaggle_circuit_stability",
-        "classifier_roc_auc": roc_auc,
+        "classifier": {
+            "model": "XGBClassifier(n_estimators=100, max_depth=5)",
+            "split": "stratified 80/20, random_state=42",
+            "roc_auc": auc, "f1": f1,
+            "logreg_roc_auc": auc_lr, "logreg_f1": f1_lr,
+            "time_split_roc_auc": auc_t, "time_split_f1": f1_t,
+            "n_train": int(len(Xtr)), "n_test": int(len(Xte)),
+            "positive_rate": float(y.mean()),
+        },
         "feature_importances": importances,
-        "stpp_prior": prior,
+        "stpp_prior": {
+            "j_spatial": {f"link_{i}": float(p_link_prior) for i in range(N_ANCILLAS)},
+            "mean_gate_error_rate": p_gate,
+            "gate_error_plausible_probability": bool(plausible),
+            "drift_rel_per_day": drift_rel_per_day,
+            "temp_gate_error_corr": temp_corr,
+            "noise_bias_eta": None,
+            "noise_bias_note": "Not derivable: dataset has one coherence-time column and no X/Z rates.",
+        },
+        "test_mean_shift": shift,
     }
-    output_path.parent.mkdir(exist_ok=True)
-    with open(output_path, "w") as f:
+    STPP_PRIOR_PATH.parent.mkdir(exist_ok=True)
+    with open(STPP_PRIOR_PATH, "w") as f:
         json.dump(payload, f, indent=2)
-    print(f"[Kaggle] Exported STPP prior → {output_path}")
+    print(f"[Kaggle] wrote {STPP_PRIOR_PATH}")
 
-
-def plot_feature_importances(importances, output_dir):
-    """Bar chart of top-20 feature importances."""
+    # --- 5. plot ---------------------------------------------------------
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    
-    sorted_feats = sorted(importances.items(), key=lambda x: -x[1])[:20]
-    names, vals = zip(*sorted_feats) if sorted_feats else ([], [])
-    
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=150)
-    ax.barh(range(len(names)), vals, color="#4ECDC4")
-    ax.set_yticks(range(len(names)))
-    ax.set_yticklabels(names, fontsize=9)
-    ax.set_xlabel("Feature Importance")
-    ax.set_title("Kaggle Circuit Stability — XGBoost Feature Importances")
-    ax.invert_yaxis()
+    items = sorted(importances.items(), key=lambda kv: kv[1])
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=150)
+    ax.barh([k for k, _ in items], [v for _, v in items], color="#4ECDC4")
+    ax.set_title(f"Circuit stability: XGBoost importances (ROC-AUC {auc:.3f})")
     fig.tight_layout()
-    fig.savefig(output_dir / "kaggle_feature_importances.png")
-    plt.close()
-    print(f"[Kaggle] Saved feature importances plot → {output_dir / 'kaggle_feature_importances.png'}")
-
-
-# ═════════════════════════════════════════════════════════════════════
-# MAIN PIPELINE
-# ═════════════════════════════════════════════════════════════════════
-def main():
-    csv_path = KAGGLE_CSV_PATH
-    
-    if not csv_path.exists():
-        print(f"[Kaggle] ERROR: Dataset not found at {csv_path}")
-        print(f"[Kaggle] Please place circuit_stability.csv in {SHARED}/")
-        print(f"[Kaggle] Generating synthetic STPP prior with defaults...")
-        
-        # ── Fallback: generate a reasonable prior without Kaggle data ──
-        prior = {
-            "j_spatial": {f"link_{i}": P_PHYS_DEFAULT for i in range(N_ANCILLAS)},
-            "k_temporal": 0.05,
-            "noise_bias_eta": 1.0,
-        }
-        export_prior(prior, {}, 0.0, STPP_PRIOR_PATH)
-        return
-    
-    # 1. Load
-    df = load_dataset(csv_path)
-    
-    # 2. Train classifier
-    clf, roc_auc, importances = train_stability_classifier(df)
-    
-    # 3. Extract temporal variance
-    temporal_var = extract_temporal_variance(df)
-    
-    # 4. Compute noise bias
-    eta = compute_noise_bias(df)
-    print(f"[Kaggle] Noise bias η = {eta:.3f}")
-    
-    # 5. Build STPP prior
-    prior = build_stpp_prior(importances, temporal_var, eta)
-    
-    # 6. Export
-    export_prior(prior, importances, roc_auc, STPP_PRIOR_PATH)
-    
-    # 7. Plot
-    plot_feature_importances(importances, FIGURES)
+    FIGURES.mkdir(exist_ok=True)
+    fig.savefig(FIGURES / "kaggle_feature_importances.png")
+    print(f"[Kaggle] wrote {FIGURES / 'kaggle_feature_importances.png'}")
 
 
 if __name__ == "__main__":
